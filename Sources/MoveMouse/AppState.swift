@@ -102,6 +102,10 @@ final class AppState: ObservableObject {
         return "Last nudge at \(timeFormatter.string(from: lastJiggleAt))"
     }
 
+    var idleDescription: String {
+        "Current idle: \(Self.secondsText(idleSeconds))"
+    }
+
     var statusSymbol: String {
         if !accessibilityGranted {
             return "hand.raised.fill"
@@ -139,6 +143,31 @@ final class AppState: ObservableObject {
     func requestAccessibilityAccess() {
         accessibilityGranted = mouseController.hasAccessibilityPermission(prompt: true)
         refreshStatus(now: .now)
+    }
+
+    func testJiggle() {
+        accessibilityGranted = mouseController.hasAccessibilityPermission(prompt: true)
+
+        guard accessibilityGranted else {
+            statusMessage = "Accessibility access is required before MoveMouse can control the cursor."
+            return
+        }
+
+        let testDistance = max(CGFloat(movementPixels), 12)
+        let didJiggle = mouseController.jiggle(
+            distance: testDistance,
+            restorePosition: false
+        )
+
+        if didJiggle {
+            let now = Date.now
+            lastJiggleAt = now
+            statusMessage = "Test jiggle sent. The pointer should have moved visibly."
+            idleSeconds = 0
+            return
+        }
+
+        statusMessage = "Test jiggle failed. Recheck Accessibility access."
     }
 
     func quit() {

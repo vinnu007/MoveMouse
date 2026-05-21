@@ -31,50 +31,47 @@ struct MouseController {
     }
 
     func jiggle(distance: CGFloat, restorePosition: Bool) -> Bool {
-        guard
-            let eventSource = CGEventSource(stateID: .combinedSessionState),
-            let currentEvent = CGEvent(source: eventSource)
-        else {
+        guard let eventSource = CGEventSource(stateID: .combinedSessionState) else {
             return false
         }
 
-        let currentMouseLocation = NSEvent.mouseLocation
-        let screenFrame = NSScreen.screens.first(where: { $0.frame.contains(currentMouseLocation) })?.frame
+        let startPoint = NSEvent.mouseLocation
+        let screenFrame = NSScreen.screens.first(where: { $0.frame.contains(startPoint) })?.frame
             ?? NSScreen.main?.frame
             ?? CGRect(x: 0, y: 0, width: 1024, height: 768)
-        let horizontalDirection: CGFloat = currentMouseLocation.x < screenFrame.midX ? 1 : -1
+        let horizontalDirection: CGFloat = startPoint.x < screenFrame.midX ? 1 : -1
         let offset = max(distance, 1) * horizontalDirection
         let clampedX = min(
-            max(currentEvent.location.x + offset, screenFrame.minX + 2),
+            max(startPoint.x + offset, screenFrame.minX + 2),
             screenFrame.maxX - 2
         )
-        let movedPoint = CGPoint(x: clampedX, y: currentEvent.location.y)
+        let movedPoint = CGPoint(x: clampedX, y: startPoint.y)
 
+        guard postMouseMove(using: eventSource, to: movedPoint) else {
+            return false
+        }
+
+        if restorePosition {
+            guard postMouseMove(using: eventSource, to: startPoint) else {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    private func postMouseMove(using eventSource: CGEventSource, to point: CGPoint) -> Bool {
         // Synthetic mouse-moved events keep the cursor nearly still while still refreshing idle state.
         guard let moveEvent = CGEvent(
             mouseEventSource: eventSource,
             mouseType: .mouseMoved,
-            mouseCursorPosition: movedPoint,
+            mouseCursorPosition: point,
             mouseButton: .left
         ) else {
             return false
         }
 
         moveEvent.post(tap: .cghidEventTap)
-
-        if restorePosition {
-            guard let restoreEvent = CGEvent(
-                mouseEventSource: eventSource,
-                mouseType: .mouseMoved,
-                mouseCursorPosition: currentEvent.location,
-                mouseButton: .left
-            ) else {
-                return false
-            }
-
-            restoreEvent.post(tap: .cghidEventTap)
-        }
-
         return true
     }
 }
