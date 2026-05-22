@@ -4,27 +4,15 @@ import Foundation
 @MainActor
 final class AppState: ObservableObject {
     @Published private(set) var isRunning = false
-    @Published var intervalSeconds: Double {
+    @Published var keepDisplayAwake: Bool {
         didSet {
-            defaults.set(intervalSeconds, forKey: DefaultsKey.intervalSeconds)
+            defaults.set(keepDisplayAwake, forKey: DefaultsKey.keepDisplayAwake)
             refreshStatus(now: .now)
         }
     }
-    @Published var movementPixels: Double {
+    @Published var keepSystemAwake: Bool {
         didSet {
-            defaults.set(movementPixels, forKey: DefaultsKey.movementPixels)
-            refreshStatus(now: .now)
-        }
-    }
-    @Published var restoreCursorPosition: Bool {
-        didSet {
-            defaults.set(restoreCursorPosition, forKey: DefaultsKey.restoreCursorPosition)
-        }
-    }
-    @Published var preventSleep: Bool {
-        didSet {
-            defaults.set(preventSleep, forKey: DefaultsKey.preventSleep)
-            updatePowerAssertion()
+            defaults.set(keepSystemAwake, forKey: DefaultsKey.keepSystemAwake)
             refreshStatus(now: .now)
         }
     }
@@ -46,72 +34,77 @@ final class AppState: ObservableObject {
             refreshStatus(now: .now)
         }
     }
-    @Published private(set) var accessibilityGranted: Bool
-    @Published private(set) var idleSeconds: TimeInterval = 0
-    @Published private(set) var lastJiggleAt: Date?
+    @Published private(set) var isWithinSchedule = true
     @Published private(set) var statusMessage = "Ready to keep your Mac awake."
 
     private let defaults: UserDefaults
-    private let mouseController: MouseController
     private let powerController: PowerAssertionController
-    private let jigglePolicy = JigglePolicy()
-    private let timeFormatter: DateFormatter
+    private let keepAwakePolicy = KeepAwakePolicy()
     private var timer: Timer?
 
     init(
         defaults: UserDefaults = .standard,
-        mouseController: MouseController = MouseController(),
         powerController: PowerAssertionController = PowerAssertionController()
     ) {
         self.defaults = defaults
-        self.mouseController = mouseController
         self.powerController = powerController
-        self.intervalSeconds = Self.storedDouble(forKey: DefaultsKey.intervalSeconds, in: defaults, fallback: 60)
-        self.movementPixels = Self.storedDouble(forKey: DefaultsKey.movementPixels, in: defaults, fallback: 2)
-        self.restoreCursorPosition = Self.storedBool(forKey: DefaultsKey.restoreCursorPosition, in: defaults, fallback: true)
-        self.preventSleep = Self.storedBool(forKey: DefaultsKey.preventSleep, in: defaults, fallback: true)
+        self.keepDisplayAwake = Self.storedBool(forKey: DefaultsKey.keepDisplayAwake, in: defaults, fallback: true)
+        self.keepSystemAwake = Self.storedBool(forKey: DefaultsKey.keepSystemAwake, in: defaults, fallback: true)
         self.scheduleEnabled = Self.storedBool(forKey: DefaultsKey.scheduleEnabled, in: defaults, fallback: false)
         self.startHour = Self.storedInt(forKey: DefaultsKey.startHour, in: defaults, fallback: 9)
         self.endHour = Self.storedInt(forKey: DefaultsKey.endHour, in: defaults, fallback: 18)
-        self.accessibilityGranted = mouseController.hasAccessibilityPermission(prompt: false)
-        self.timeFormatter = Self.makeTimeFormatter()
+        startTimer()
         refreshStatus(now: .now)
     }
 
     var menuBarSymbol: String {
-        isRunning ? "cursorarrow.motionlines" : "cursorarrow"
+        isActivelyKeepingAwake ? "bolt.badge.clock.fill" : (isRunning ? "bolt.circle" : "pause.circle")
     }
 
     var runningLabel: String {
-        isRunning ? "MoveMouse is active" : "MoveMouse is paused"
+        isRunning ? "Keep Awake is active" : "Keep Awake is paused"
     }
 
     var runningSummary: String {
-        isRunning ? "Your Mac will stay awake after idle time is detected." : "Turn it on whenever you want a hands-free keep-awake session."
+        isRunning
+            ? "MoveMouse is using macOS power assertions to keep your Mac awake."
+            : "Turn it on whenever you want to stop your Mac from sleeping."
     }
 
     var scheduleSummary: String {
         schedule.summary()
     }
 
-    var lastJiggleDescription: String? {
-        guard let lastJiggleAt else {
-            return nil
+    var protectionSummary: String {
+        switch (keepDisplayAwake, keepSystemAwake) {
+        case (true, true):
+            return "Keeping both the display and system awake."
+        case (true, false):
+            return "Keeping only the display awake."
+        case (false, true):
+            return "Keeping only the system awake."
+        case (false, false):
+            return "No keep-awake option is currently selected."
         }
-
-        return "Last nudge at \(timeFormatter.string(from: lastJiggleAt))"
     }
 
-    var idleDescription: String {
-        "Current idle: \(Self.secondsText(idleSeconds))"
+    var scheduleStatusSummary: String {
+        scheduleEnabled
+            ? (isWithinSchedule ? "Inside active hours" : "Outside active hours")
+            : "Schedule disabled"
     }
 
     var statusSymbol: String {
-        if !accessibilityGranted {
-            return "hand.raised.fill"
+        switch currentEligibility {
+        case .active:
+            return "bolt.fill"
+        case .outsideSchedule:
+            return "clock.badge.exclamationmark"
+        case .nothingSelected:
+            return "exclamationmark.triangle.fill"
+        case .stopped:
+            return "pause.circle.fill"
         }
-
-        return isRunning ? "bolt.fill" : "pause.circle.fill"
     }
 
     func setRunning(_ shouldRun: Bool) {
@@ -119,59 +112,25 @@ final class AppState: ObservableObject {
             return
         }
 
-        if shouldRun {
-            accessibilityGranted = mouseController.hasAccessibilityPermission(prompt: true)
-
-            guard accessibilityGranted else {
-                statusMessage = "Accessibility access is required before MoveMouse can control the cursor."
-                return
-            }
-
-            isRunning = true
-            startTimer()
-            updatePowerAssertion()
-            refreshStatus(now: .now)
-            return
-        }
-
-        isRunning = false
-        stopTimer()
-        updatePowerAssertion()
+        isRunning = shouldRun
         refreshStatus(now: .now)
-    }
-
-    func requestAccessibilityAccess() {
-        accessibilityGranted = mouseController.hasAccessibilityPermission(prompt: true)
-        refreshStatus(now: .now)
-    }
-
-    func testJiggle() {
-        accessibilityGranted = mouseController.hasAccessibilityPermission(prompt: true)
-
-        guard accessibilityGranted else {
-            statusMessage = "Accessibility access is required before MoveMouse can control the cursor."
-            return
-        }
-
-        let testDistance = max(CGFloat(movementPixels), 12)
-        let didJiggle = mouseController.jiggle(
-            distance: testDistance,
-            restorePosition: false
-        )
-
-        if didJiggle {
-            let now = Date.now
-            lastJiggleAt = now
-            statusMessage = "Test jiggle sent. The pointer should have moved visibly."
-            idleSeconds = 0
-            return
-        }
-
-        statusMessage = "Test jiggle failed. Recheck Accessibility access."
     }
 
     func quit() {
         NSApplication.shared.terminate(nil)
+    }
+
+    private var currentEligibility: KeepAwakeEligibility {
+        keepAwakePolicy.eligibility(
+            isRunning: isRunning,
+            isWithinSchedule: isWithinSchedule,
+            keepDisplayAwake: keepDisplayAwake,
+            keepSystemAwake: keepSystemAwake
+        )
+    }
+
+    private var isActivelyKeepingAwake: Bool {
+        currentEligibility == .active
     }
 
     private var schedule: ActiveSchedule {
@@ -185,12 +144,12 @@ final class AppState: ObservableObject {
     private func startTimer() {
         stopTimer()
 
-        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 5, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.tick(now: .now)
             }
         }
-        timer.tolerance = 0.2
+        timer.tolerance = 1
 
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
@@ -202,82 +161,33 @@ final class AppState: ObservableObject {
         timer = nil
     }
 
-    private func syncSystemState() {
-        accessibilityGranted = mouseController.hasAccessibilityPermission(prompt: false)
-        idleSeconds = mouseController.idleSeconds
-    }
-
     private func tick(now: Date) {
-        syncSystemState()
-
-        switch jigglePolicy.eligibility(
-            isRunning: isRunning,
-            hasAccessibilityPermission: accessibilityGranted,
-            isWithinSchedule: schedule.contains(now),
-            idleSeconds: idleSeconds,
-            intervalSeconds: intervalSeconds,
-            lastJiggleAt: lastJiggleAt,
-            now: now
-        ) {
-        case .ready:
-            let didJiggle = mouseController.jiggle(
-                distance: CGFloat(movementPixels),
-                restorePosition: restoreCursorPosition
-            )
-
-            if didJiggle {
-                lastJiggleAt = now
-                statusMessage = "Cursor nudged at \(timeFormatter.string(from: now))."
-            } else {
-                accessibilityGranted = mouseController.hasAccessibilityPermission(prompt: false)
-                statusMessage = "MoveMouse could not post a cursor event. Recheck Accessibility access."
-            }
-        case .stopped:
-            statusMessage = "Paused and ready when you are."
-        case .missingPermission:
-            statusMessage = "Grant Accessibility access so MoveMouse can control the pointer."
-        case .outsideSchedule:
-            statusMessage = "Outside active hours. Current schedule: \(scheduleSummary)."
-        case .waitingForIdle(let secondsRemaining):
-            statusMessage = "Watching for \(Self.secondsText(secondsRemaining)) of idle time."
-        case .waitingForInterval(let secondsRemaining):
-            statusMessage = "Next nudge in about \(Self.secondsText(secondsRemaining))."
-        }
+        refreshStatus(now: now)
     }
 
     private func refreshStatus(now: Date) {
-        syncSystemState()
+        isWithinSchedule = schedule.contains(now)
 
-        switch jigglePolicy.eligibility(
-            isRunning: isRunning,
-            hasAccessibilityPermission: accessibilityGranted,
-            isWithinSchedule: schedule.contains(now),
-            idleSeconds: idleSeconds,
-            intervalSeconds: intervalSeconds,
-            lastJiggleAt: lastJiggleAt,
-            now: now
-        ) {
-        case .ready:
-            statusMessage = "Ready for the next idle nudge."
+        switch currentEligibility {
+        case .active:
+            statusMessage = protectionSummary
         case .stopped:
             statusMessage = "Paused and ready when you are."
-        case .missingPermission:
-            statusMessage = "Grant Accessibility access so MoveMouse can control the pointer."
+        case .nothingSelected:
+            statusMessage = "Enable at least one keep-awake option to prevent sleep."
         case .outsideSchedule:
             statusMessage = "Outside active hours. Current schedule: \(scheduleSummary)."
-        case .waitingForIdle(let secondsRemaining):
-            statusMessage = "Watching for \(Self.secondsText(secondsRemaining)) of idle time."
-        case .waitingForInterval(let secondsRemaining):
-            statusMessage = "Next nudge in about \(Self.secondsText(secondsRemaining))."
         }
+
+        updatePowerAssertion()
     }
 
     private func updatePowerAssertion() {
-        powerController.update(isActive: isRunning && preventSleep)
-    }
-
-    private static func storedDouble(forKey key: String, in defaults: UserDefaults, fallback: Double) -> Double {
-        defaults.object(forKey: key) == nil ? fallback : defaults.double(forKey: key)
+        powerController.update(
+            isActive: isActivelyKeepingAwake,
+            keepDisplayAwake: keepDisplayAwake,
+            keepSystemAwake: keepSystemAwake
+        )
     }
 
     private static func storedBool(forKey key: String, in defaults: UserDefaults, fallback: Bool) -> Bool {
@@ -288,23 +198,11 @@ final class AppState: ObservableObject {
         defaults.object(forKey: key) == nil ? fallback : defaults.integer(forKey: key)
     }
 
-    private static func makeTimeFormatter() -> DateFormatter {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        formatter.dateStyle = .none
-        return formatter
-    }
-
-    private static func secondsText(_ interval: TimeInterval) -> String {
-        "\(Int(interval.rounded(.up))) sec"
-    }
 }
 
 private enum DefaultsKey {
-    static let intervalSeconds = "intervalSeconds"
-    static let movementPixels = "movementPixels"
-    static let restoreCursorPosition = "restoreCursorPosition"
-    static let preventSleep = "preventSleep"
+    static let keepDisplayAwake = "keepDisplayAwake"
+    static let keepSystemAwake = "keepSystemAwake"
     static let scheduleEnabled = "scheduleEnabled"
     static let startHour = "startHour"
     static let endHour = "endHour"

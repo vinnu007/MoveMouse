@@ -46,49 +46,32 @@ struct ActiveSchedule: Equatable {
     }
 }
 
-enum JiggleEligibility: Equatable {
+enum KeepAwakeEligibility: Equatable {
     case stopped
-    case missingPermission
+    case nothingSelected
     case outsideSchedule
-    case waitingForIdle(secondsRemaining: TimeInterval)
-    case waitingForInterval(secondsRemaining: TimeInterval)
-    case ready
+    case active
 }
 
-struct JigglePolicy {
+struct KeepAwakePolicy {
     func eligibility(
         isRunning: Bool,
-        hasAccessibilityPermission: Bool,
         isWithinSchedule: Bool,
-        idleSeconds: TimeInterval,
-        intervalSeconds: TimeInterval,
-        lastJiggleAt: Date?,
-        now: Date
-    ) -> JiggleEligibility {
+        keepDisplayAwake: Bool,
+        keepSystemAwake: Bool
+    ) -> KeepAwakeEligibility {
         guard isRunning else {
             return .stopped
         }
 
-        guard hasAccessibilityPermission else {
-            return .missingPermission
+        guard keepDisplayAwake || keepSystemAwake else {
+            return .nothingSelected
         }
 
         guard isWithinSchedule else {
             return .outsideSchedule
         }
 
-        guard idleSeconds >= intervalSeconds else {
-            return .waitingForIdle(secondsRemaining: intervalSeconds - idleSeconds)
-        }
-
-        if let lastJiggleAt {
-            let elapsed = now.timeIntervalSince(lastJiggleAt)
-
-            if elapsed < intervalSeconds {
-                return .waitingForInterval(secondsRemaining: intervalSeconds - elapsed)
-            }
-        }
-
-        return .ready
+        return .active
     }
 }

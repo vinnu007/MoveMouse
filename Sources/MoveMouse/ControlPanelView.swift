@@ -34,46 +34,26 @@ struct ControlPanelView: View {
 
                     Divider()
 
-                    Toggle("Prevent display and system sleep", isOn: $appState.preventSleep)
+                    Toggle("Keep display awake", isOn: $appState.keepDisplayAwake)
+                    Toggle("Keep system awake", isOn: $appState.keepSystemAwake)
 
                     HStack {
                         Spacer()
 
-                        Button("Test Jiggle") {
-                            appState.testJiggle()
-                        }
-                        .buttonStyle(.borderedProminent)
+                        Text(appState.protectionSummary)
+                            .font(.caption)
+                            .foregroundStyle(theme.secondaryText)
                     }
                 }
 
-                PanelCard(title: "Idle Trigger", systemImage: "timer", theme: theme) {
-                    HStack {
-                        Text("Jiggle after idle")
-                        Spacer()
-                        Text("\(Int(appState.intervalSeconds)) sec")
-                            .monospacedDigit()
-                            .foregroundStyle(theme.secondaryText)
-                    }
+                PanelCard(title: "Status", systemImage: appState.statusSymbol, theme: theme) {
+                    Text(appState.statusMessage)
+                        .font(.body)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                    Slider(value: $appState.intervalSeconds, in: 30...600, step: 15)
-
-                    Text(appState.idleDescription)
+                    Text(appState.scheduleStatusSummary)
                         .font(.caption)
                         .foregroundStyle(theme.secondaryText)
-                }
-
-                PanelCard(title: "Cursor Motion", systemImage: "arrow.left.and.right", theme: theme) {
-                    HStack {
-                        Text("Movement distance")
-                        Spacer()
-                        Text("\(Int(appState.movementPixels)) px")
-                            .monospacedDigit()
-                            .foregroundStyle(theme.secondaryText)
-                    }
-
-                    Slider(value: $appState.movementPixels, in: 1...10, step: 1)
-
-                    Toggle("Return pointer to original spot", isOn: $appState.restoreCursorPosition)
                 }
 
                 PanelCard(title: "Schedule", systemImage: "clock", theme: theme) {
@@ -114,19 +94,6 @@ struct ControlPanelView: View {
                         .foregroundStyle(theme.secondaryText)
                 }
 
-                if !appState.accessibilityGranted {
-                    PanelCard(title: "Permission", systemImage: "hand.raised.fill", theme: theme) {
-                        Text("macOS needs Accessibility permission before MoveMouse can post cursor movement events.")
-                            .font(.subheadline)
-                            .foregroundStyle(theme.secondaryText)
-
-                        Button("Request Accessibility Access") {
-                            appState.requestAccessibilityAccess()
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                }
-
                 footer
             }
             .padding(18)
@@ -144,7 +111,7 @@ struct ControlPanelView: View {
                     .font(.system(size: 24, weight: .semibold, design: .rounded))
                     .foregroundStyle(theme.primaryText)
 
-                Text("A tiny macOS menu bar utility that nudges the cursor only after your Mac has gone idle.")
+                Text("A tiny macOS menu bar utility that keeps your Mac awake without moving the pointer.")
                     .font(.subheadline)
                     .foregroundStyle(theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -165,16 +132,11 @@ struct ControlPanelView: View {
     }
 
     private var footer: some View {
-        PanelCard(title: "Status", systemImage: appState.statusSymbol, theme: theme) {
-            Text(appState.statusMessage)
+        PanelCard(title: "App Store Path", systemImage: "checkmark.shield", theme: theme) {
+            Text("This version avoids Accessibility permission and synthetic cursor movement, which is a safer direction for Mac App Store distribution.")
                 .font(.footnote)
+                .foregroundStyle(theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
-
-            if let lastJiggleDescription = appState.lastJiggleDescription {
-                Text(lastJiggleDescription)
-                    .font(.caption)
-                    .foregroundStyle(theme.secondaryText)
-            }
 
             HStack {
                 Spacer()
